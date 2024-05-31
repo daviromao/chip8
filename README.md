@@ -14,7 +14,7 @@ This project is a Chip-8 emulator written in Rust, utilizing the SDL2 library fo
 - [Documentation](#documentation)
 - [Examples](#examples)
 - [Troubleshooting](#troubleshooting)
-- [Contributors](#contributors)
+- [Authors](#authors)
 - [License](#license)
 
 ## Installation
@@ -23,7 +23,7 @@ This project is a Chip-8 emulator written in Rust, utilizing the SDL2 library fo
    
 2. **Clone the repository**:
     ```sh
-    git clone <repository-url>
+    git clone https://github.com/daviromao/chip8-rs
     cd chip-8-emulator
     ```
 3. **Install dependencies**:
