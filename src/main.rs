@@ -1,7 +1,17 @@
-use std::{fs::File, io::Read, process::Command};
+use std::{
+    fs::File,
+    io::Read,
+    time::{Duration, Instant},
+};
+
+use sdl2::{
+    event::Event, keyboard::Keycode, pixels::Color, rect::Rect, render::Canvas, video::Window,
+};
 
 #[macro_use]
 mod macros;
+
+const SCALE: u32 = 10;
 
 struct ChipContext {
     // Memory
@@ -21,6 +31,9 @@ struct ChipContext {
 
     // Display buffer on/off
     framebuffer: [[bool; 32]; 64],
+
+    // Keys
+    keyboard: [bool; 16],
 }
 
 impl ChipContext {
@@ -35,6 +48,7 @@ impl ChipContext {
             i: 0,
             stack: [0; 16],
             framebuffer: [[false; 32]; 64],
+            keyboard: [false; 16],
         }
     }
 
@@ -232,14 +246,14 @@ fn draw(chip: &mut ChipContext, x: u8, y: u8, n: u8) {
 
 // Ex9E - SKP Vx
 fn skip_key(chip: &mut ChipContext, x: u8) {
-    if chip.v[x as usize] == 1 {
+    if chip.keyboard[chip.v[x as usize] as usize] {
         chip.pc += 2;
     }
 }
 
 // ExA1 - SKNP Vx
 fn skip_not_key(chip: &mut ChipContext, x: u8) {
-    if chip.v[x as usize] == 0 {
+    if !chip.keyboard[chip.v[x as usize] as usize] {
         chip.pc += 2;
     }
 }
@@ -250,8 +264,19 @@ fn load_vx_dt(chip: &mut ChipContext, x: u8) {
 }
 
 // Fx0A - LD Vx, K
-fn load_key(_chip: &mut ChipContext, _x: u8) {
-    todo!();
+fn load_key(chip: &mut ChipContext, x: u8) {
+    let mut pressed = false;
+
+    for i in 0..chip.keyboard.len() {
+        if chip.keyboard[i] {
+            chip.v[x as usize] = i as u8;
+            pressed = true;
+            break;
+        }
+    }
+    if !pressed {
+        chip.pc -= 2
+    };
 }
 
 // Fx15 - LD DT, Vx
@@ -271,7 +296,7 @@ fn add_i_vx(chip: &mut ChipContext, x: u8) {
 
 // Fx29 - LD F, Vx
 fn load_f_vx(chip: &mut ChipContext, x: u8) {
-    chip.i = (chip.v[x as usize] as u16) * 5;
+    chip.i = 0x50 + (chip.v[x as usize] as u16) * 5;
 }
 
 // Fx33 - LD B, Vx
@@ -295,43 +320,76 @@ fn load_vx_i(chip: &mut ChipContext, x: u8) {
     }
 }
 
-fn clear_terminal() {
-    if cfg!(target_os = "windows") {
-        Command::new("cmd")
-            .args(&["/C", "cls"])
-            .status()
-            .expect("Failed to clear terminal");
-    } else {
-        Command::new("clear")
-            .status()
-            .expect("Failed to clear terminal");
+fn render(chip: &ChipContext, canvas: &mut Canvas<Window>) {
+    canvas.set_draw_color(Color::RGB(0, 0, 0));
+    canvas.clear();
+
+    canvas.set_draw_color(Color::RGB(255, 255, 255));
+
+    for y in (0..32).map(|x| x as u32) {
+        for x in (0..64).map(|y| y as u32) {
+            if chip.framebuffer[x as usize][y as usize] {
+                let rect = Rect::new((x * SCALE) as i32, (y * SCALE) as i32, SCALE, SCALE);
+                canvas.fill_rect(rect).unwrap();
+            }
+        }
+    }
+    canvas.present();
+}
+
+fn key2btn(key: Keycode) -> Option<usize> {
+    match key {
+        Keycode::Num1 => Some(0x1),
+        Keycode::Num2 => Some(0x2),
+        Keycode::Num3 => Some(0x3),
+        Keycode::Num4 => Some(0xC),
+        Keycode::Q => Some(0x4),
+        Keycode::W => Some(0x5),
+        Keycode::E => Some(0x6),
+        Keycode::R => Some(0xD),
+        Keycode::A => Some(0x7),
+        Keycode::S => Some(0x8),
+        Keycode::D => Some(0x9),
+        Keycode::F => Some(0xE),
+        Keycode::Z => Some(0xA),
+        Keycode::X => Some(0x0),
+        Keycode::C => Some(0xB),
+        Keycode::V => Some(0xF),
+        _ => None,
     }
 }
 
-fn render(chip: &ChipContext) {
-    clear_terminal();
-    print!("▛");
-    for _ in 0..64 {
-        print!("▀")
-    }
-    println!("▜");
-    for y in 0..32 {
-        print!("▌");
-        for x in 0..64 {
-            print!("{}", if chip.framebuffer[x][y] { "▇" } else { " " });
-        }
-        print!("▐");
-        println!();
-    }
-    print!("▙");
-    for _ in 0..64 {
-        print!("▄")
-    }
-    println!("▟");
+// function to clear and show all informations about memory, register and stack in terminal each cycle of loop
+fn debug(chip: &ChipContext) {
+    println!("PC: {:#04x}", chip.pc);
+    println!("I: {:#04x}", chip.i);
+    println!("SP: {:#04x}", chip.sp);
+    println!("DT: {:#04x}", chip.dt);
+    println!("ST: {:#04x}", chip.st);
+    println!("Registers: {:?}", chip.v);
+    println!("Stack: {:?}", chip.stack);
+    println!("Keyboard: {:?}", chip.keyboard);
     println!();
 }
 
-fn main() {
+fn main() -> Result<(), String> {
+    let sdl_context = sdl2::init()?;
+    let video_subsystem = sdl_context.video()?;
+
+    let window = video_subsystem
+        .window("rust-sdl2 demo: Video", 64 * SCALE, 32 * SCALE)
+        .position_centered()
+        .opengl()
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let mut canvas = window.into_canvas().build().map_err(|e| e.to_string())?;
+
+    canvas.set_draw_color(Color::RGB(0, 0, 0));
+    canvas.clear();
+    canvas.present();
+    let mut event_pump = sdl_context.event_pump()?;
+
     let mut chip = ChipContext::new();
     chip.load_font();
 
@@ -339,19 +397,50 @@ fn main() {
     args.next();
     let rom_path = args.next().expect("ROM path not provided");
     chip.load_rom(&rom_path);
-
     chip.pc = 0x200;
 
-    loop {
+    let mut last_update = Instant::now();
+    let clock = Duration::from_millis(1000 / 60);
+
+    'running: loop {
+        for event in event_pump.poll_iter() {
+            match event {
+                Event::Quit { .. }
+                | Event::KeyDown {
+                    keycode: Some(Keycode::Escape),
+                    ..
+                } => break 'running,
+                Event::KeyDown {
+                    keycode: Some(key), ..
+                } => {
+                    if let Some(k) = key2btn(key) {
+                        chip.keyboard[k as usize] = true;
+                    }
+                }
+                Event::KeyUp {
+                    keycode: Some(key), ..
+                } => {
+                    if let Some(k) = key2btn(key) {
+                        chip.keyboard[k as usize] = false;
+                    }
+                }
+                _ => (),
+            }
+        }
+
         let byte1 = chip.memory[chip.pc as usize];
         let byte2 = chip.memory[(chip.pc + 1) as usize];
+
         let opcode = ((byte1 as u16) << 8) | byte2 as u16;
+
         chip.pc += 2;
+
         match opcode >> 12 {
             0x0 => match opcode & 0x00FF {
+                0x00 => (),
                 0xE0 => clean_screen(&mut chip),
                 0xEE => return_sbr(&mut chip),
-                _ => panic!("Invalid opcode"),
+                _ => panic!("Invalid opcode: {:#04x}", opcode),
             },
             0x1 => jump(&mut chip, opcode & 0x0FFF),
             0x2 => call_sbr(&mut chip, opcode & 0x0FFF),
@@ -426,7 +515,7 @@ fn main() {
                     ((opcode & 0x0F00) >> 8) as u8,
                     ((opcode & 0x00F0) >> 4) as u8,
                 ),
-                _ => panic!("Invalid opcode"),
+                _ => panic!("Invalid opcode: {:#04x}", opcode),
             },
             0x9 => sne(
                 &mut chip,
@@ -449,7 +538,7 @@ fn main() {
             0xE => match opcode & 0x00FF {
                 0x9E => skip_key(&mut chip, ((opcode & 0x0F00) >> 8) as u8),
                 0xA1 => skip_not_key(&mut chip, ((opcode & 0x0F00) >> 8) as u8),
-                _ => panic!("Invalid opcode"),
+                _ => panic!("Invalid opcode: {:#04x}", opcode),
             },
             0xF => match opcode & 0x00FF {
                 0x07 => load_vx_dt(&mut chip, ((opcode & 0x0F00) >> 8) as u8),
@@ -461,11 +550,20 @@ fn main() {
                 0x33 => load_b_vx(&mut chip, ((opcode & 0x0F00) >> 8) as u8),
                 0x55 => load_i_vx(&mut chip, ((opcode & 0x0F00) >> 8) as u8),
                 0x65 => load_vx_i(&mut chip, ((opcode & 0x0F00) >> 8) as u8),
-                _ => panic!("Invalid opcode"),
+                _ => panic!("Invalid opcode: {:#04x}", opcode),
             },
-            _ => panic!("Invalid opcode"),
+            _ => panic!("Invalid opcode: {:#04x}", opcode),
         }
-        std::thread::sleep(std::time::Duration::from_millis(2));
-        render(&chip);
+        render(&chip, &mut canvas);
+
+        if last_update.elapsed() >= clock {
+            chip.dt = if chip.dt > 0 { chip.dt - 1 } else { 0 };
+            chip.st = if chip.st > 0 { chip.st - 1 } else { 0 };
+            last_update = Instant::now();
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        debug(&chip);
     }
+    Ok(())
 }
